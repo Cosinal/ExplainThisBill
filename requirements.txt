@@ -1,0 +1,6 @@
+requests
+openai
+supabase
+tiktoken
+python-dotenv
+beautifulsoup4
