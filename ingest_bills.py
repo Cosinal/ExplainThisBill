@@ -15,7 +15,8 @@ from supabase_client import (
     insert_bill,
     insert_bill_chunks,
     count_bills,
-    count_chunks
+    count_chunks,
+    reset_bill_data
 )
 
 
@@ -119,7 +120,12 @@ def process_single_bill(bill_data: Dict) -> bool:
     return True
 
 
-def ingest_bills_batch(session: str = "44-1", max_bills: int = 5, delay_seconds: int = 2) -> Dict:
+def ingest_bills_batch(
+    session: str = "44-1",
+    max_bills: int = 5,
+    delay_seconds: int = 2,
+    reset_before_ingest: bool = True
+) -> Dict:
     """
     Main function: Ingest multiple bills from a parliamentary session
     
@@ -138,8 +144,9 @@ def ingest_bills_batch(session: str = "44-1", max_bills: int = 5, delay_seconds:
     print(f"Session: {session}")
     print(f"Max bills: {max_bills}")
     print(f"Delay between bills: {delay_seconds}s")
+    print(f"Reset database first: {reset_before_ingest}")
     print("="*80 + "\n")
-    
+
     # Track statistics
     stats = {
         'attempted': 0,
@@ -148,7 +155,17 @@ def ingest_bills_batch(session: str = "44-1", max_bills: int = 5, delay_seconds:
         'skipped': 0,
         'total_chunks': 0
     }
-    
+
+    if reset_before_ingest:
+        print("STEP 0: RESETTING EXISTING DATA")
+        print("-"*80)
+
+        if reset_bill_data():
+            print("✅ Cleared bills and chunks from Supabase\n")
+        else:
+            print("\n❌ Failed to reset bill data. Aborting.")
+            return stats
+
     # Step 1: Fetch bills from OpenParliament
     print("STEP 1: FETCHING BILLS")
     print("-"*80)
@@ -248,7 +265,12 @@ def ingest_incremental(session: str = "44-1", max_new_bills: int = 10) -> Dict:
     print("="*80 + "\n")
     
     # Use the main ingestion function
-    stats = ingest_bills_batch(session=session, max_bills=fetch_count, delay_seconds=2)
+    stats = ingest_bills_batch(
+        session=session,
+        max_bills=fetch_count,
+        delay_seconds=2,
+        reset_before_ingest=False
+    )
     
     return stats
 
@@ -261,8 +283,8 @@ if __name__ == "__main__":
     
     # Configuration
     # Start small for testing, then scale up
-    SESSION = "44-1"  # 44th Parliament, 1st session (current as of 2025)
-    MAX_BILLS = 5     # Start with 5 for testing
+    SESSION = "45-1"  # 44th Parliament, 1st session (current as of 2025)
+    MAX_BILLS = 78     # Start with 5 for testing
     
     print("Configuration:")
     print(f"  Session: {SESSION}")

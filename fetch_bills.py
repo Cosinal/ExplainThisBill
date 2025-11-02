@@ -4,8 +4,10 @@
 
 import requests
 from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+from datetime import datetime
 import time
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 
 def fetch_bills_list(session: str = "44-1", limit: int = 5) -> List[Dict]:
@@ -143,6 +145,115 @@ def scrape_bill_text(text_url: str) -> Optional[str]:
         return None
 
 
+def fetch_related_resource(relative_url: Optional[str]) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a related OpenParliament resource given a relative URL.
+
+    Adds ?format=json automatically and returns the parsed payload.
+    """
+
+    if not relative_url:
+        return None
+
+    full_url = urljoin("https://api.openparliament.ca", relative_url)
+
+    if "format=" not in full_url:
+        separator = "&" if "?" in full_url else "?"
+        full_url = f"{full_url}{separator}format=json"
+
+    try:
+        response = requests.get(full_url)
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        print(f"   ⚠️  Failed to fetch related resource {relative_url}: {exc}")
+        return None
+
+
+def parse_iso_date(value: Optional[Any]) -> Optional[str]:
+    """
+    Normalize date-like values to YYYY-MM-DD strings.
+    """
+
+    if not value or isinstance(value, bool):
+        return None
+
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).date().isoformat()
+        except ValueError:
+            return None
+
+    return None
+
+
+def extract_bill_metadata(bill_details: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build a metadata dictionary from bill details payload aligned with DB columns.
+    """
+
+    status_code = bill_details.get('status_code')
+    status_description = (bill_details.get('status') or {}).get('en')
+    introduced_date = parse_iso_date(bill_details.get('introduced'))
+
+    law_date = None
+    law_field = bill_details.get('law')
+    if isinstance(law_field, dict):
+        for key in ('royal_assent', 'assent', 'date'):
+            candidate = law_field.get(key)
+            law_date = parse_iso_date(candidate)
+            if law_date:
+                break
+    elif isinstance(law_field, str):
+        law_date = parse_iso_date(law_field)
+
+    sponsor_name = None
+    sponsor_party = None
+    sponsor_riding = None
+    sponsor_province = None
+
+    sponsor_data = fetch_related_resource(bill_details.get('sponsor_politician_url'))
+    if sponsor_data:
+        sponsor_name = sponsor_data.get('name')
+
+    membership_data = fetch_related_resource(bill_details.get('sponsor_politician_membership_url'))
+    if membership_data:
+        party = membership_data.get('party', {})
+        sponsor_party = (
+            (party.get('short_name') or {}).get('en')
+            or (party.get('name') or {}).get('en')
+        )
+
+        riding = membership_data.get('riding', {})
+        sponsor_riding = (riding.get('name') or {}).get('en')
+        sponsor_province = riding.get('province')
+
+    private_member_raw = bill_details.get('private_member_bill')
+    private_member_bill = (
+        bool(private_member_raw) if private_member_raw is not None else None
+    )
+
+    return {
+        'session': bill_details.get('session'),
+        'legisinfo_id': bill_details.get('legisinfo_id'),
+        'status_code': status_code,
+        'status_description': status_description,
+        'introduced_date': introduced_date,
+        'home_chamber': bill_details.get('home_chamber'),
+        'private_member_bill': private_member_bill,
+        'law_date': law_date,
+        'legisinfo_url': bill_details.get('legisinfo_url'),
+        'text_url': bill_details.get('text_url'),
+        'sponsor_name': sponsor_name,
+        'sponsor_party': sponsor_party,
+        'sponsor_riding': sponsor_riding,
+        'sponsor_province': sponsor_province,
+        'is_ceremonial': status_code == 'ProForma',
+        'source_api_url': bill_details.get('url'),
+        'vote_urls': bill_details.get('vote_urls', []),
+    }
+
+
 def fetch_complete_bill_data(bill: Dict) -> Optional[Dict]:
     """
     Fetch complete data for a single bill (metadata + full text)
@@ -216,6 +327,10 @@ def fetch_complete_bill_data(bill: Dict) -> Optional[Dict]:
         print("ℹ️  Using title as text")
     
     # Step 4: Build the complete bill data dictionary
+    metadata = extract_bill_metadata(bill_details)
+
+    session_code = metadata.get('session') or bill_details.get('session', '')
+
     complete_data = {
         'bill_number': bill_number,
         'title': bill_details.get('name', {}).get('en', 'Untitled'),
@@ -223,11 +338,23 @@ def fetch_complete_bill_data(bill: Dict) -> Optional[Dict]:
         'summary': '',  # OpenParliament doesn't provide summaries
         'full_text': full_text,
         'status': bill_details.get('status', {}).get('en', 'Unknown'),
-        'session': bill_details.get('session', ''),
-        'introduced_date': bill_details.get('introduced'),
-        'url': f"https://www.parl.ca/legisinfo/en/bill/{bill_details.get('session', '')}/{bill_number}",
-        'text_url': text_url or '',
-        'legisinfo_id': bill_details.get('legisinfo_id')
+        'session': session_code,
+        'introduced_date': metadata.get('introduced_date'),
+        'url': f"https://www.parl.ca/legisinfo/en/bill/{session_code}/{bill_number}",
+        'text_url': metadata.get('text_url'),
+        'legisinfo_id': metadata.get('legisinfo_id'),
+        'legisinfo_url': metadata.get('legisinfo_url'),
+        'status_code': metadata.get('status_code'),
+        'status_description': metadata.get('status_description'),
+        'home_chamber': metadata.get('home_chamber'),
+        'private_member_bill': metadata.get('private_member_bill'),
+        'law_date': metadata.get('law_date'),
+        'sponsor_name': metadata.get('sponsor_name'),
+        'sponsor_party': metadata.get('sponsor_party'),
+        'sponsor_riding': metadata.get('sponsor_riding'),
+        'sponsor_province': metadata.get('sponsor_province'),
+        'is_ceremonial': metadata.get('is_ceremonial', False),
+        'metadata': metadata
     }
     
     # Print success with text length
@@ -300,10 +427,3 @@ if __name__ == "__main__":
     test_bills = fetch_bills(session="44-1", max_bills=3)
     
     # Print what we got
-    print("\n📊 RESULTS:")
-    print("-" * 80)
-    for bill in test_bills:
-        print(f"Bill {bill['bill_number']}: {bill['title'][:50]}...")
-        print(f"  Text length: {len(bill['full_text'])} characters")
-        print(f"  Status: {bill['status']}")
-        print()

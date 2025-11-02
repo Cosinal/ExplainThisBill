@@ -70,7 +70,20 @@ def insert_bill(bill_data: Dict) -> Optional[str]:
             'status': bill_data.get('status'),
             'session': bill_data.get('session'),
             'introduced_date': bill_data.get('introduced_date'),
-            'url': bill_data.get('url')
+            'url': bill_data.get('url'),
+            'short_title': bill_data.get('short_title'),
+            'status_code': bill_data.get('status_code'),
+            'status_description': bill_data.get('status_description'),
+            'home_chamber': bill_data.get('home_chamber'),
+            'legisinfo_url': bill_data.get('legisinfo_url'),
+            'text_url': bill_data.get('text_url'),
+            'private_member_bill': bill_data.get('private_member_bill'),
+            'law_date': bill_data.get('law_date'),
+            'sponsor_name': bill_data.get('sponsor_name'),
+            'sponsor_party': bill_data.get('sponsor_party'),
+            'sponsor_riding': bill_data.get('sponsor_riding'),
+            'sponsor_province': bill_data.get('sponsor_province'),
+            'is_ceremonial': bill_data.get('is_ceremonial', False)
         }
         
         # Insert into bills table
@@ -102,34 +115,47 @@ def insert_bill_chunks(bill_id: str, chunks_data: List[Dict]) -> bool:
         True if successful, False if failed
     """
     
+    # Prepare chunk records for insertion
+    insert_records = []
+
+    for chunk in chunks_data:
+        record = {
+            'bill_id': bill_id,
+            'chunk_text': chunk.get('chunk_text'),
+            'chunk_index': chunk.get('chunk_index'),
+            'embedding': chunk.get('embedding'),
+            'clause_reference': None
+        }
+
+        insert_records.append(record)
+
     try:
-        # Prepare chunk records for insertion
-        insert_records = []
-        
-        # Loop through each chunk
-        for chunk in chunks_data:
-            # Build the record for this chunk
-            record = {
-                'bill_id': bill_id,  # Foreign key to bills table
-                'chunk_text': chunk.get('chunk_text'),
-                'chunk_index': chunk.get('chunk_index'),
-                'embedding': chunk.get('embedding'),  # Vector field
-                'clause_reference': None  # Optional field, null for now
-            }
-            
-            # Add to list
-            insert_records.append(record)
-        
-        # Insert all chunks in one operation (batch insert)
-        # This is much faster than inserting one at a time
         supabase.table('bill_chunks').insert(insert_records).execute()
-        
-        # Return success
         return True
-        
     except Exception as e:
-        # Handle insertion errors
         print(f"   ❌ Error inserting chunks: {str(e)}")
+        return False
+
+
+def reset_bill_data() -> bool:
+    """
+    Remove all bills and chunks before a fresh ingestion run.
+
+    Returns:
+        True when both deletes succeed, False otherwise.
+    """
+
+    try:
+        # Delete children first to avoid foreign key violations if CASCADE is disabled
+        supabase.table('bill_chunks').delete().neq(
+            'id', '00000000-0000-0000-0000-000000000000'
+        ).execute()
+        supabase.table('bills').delete().neq(
+            'id', '00000000-0000-0000-0000-000000000000'
+        ).execute()
+        return True
+    except Exception as e:
+        print(f"   ❌ Error resetting bill data: {str(e)}")
         return False
 
 
